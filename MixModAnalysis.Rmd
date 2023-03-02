@@ -1,0 +1,203 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+This is linear mixed modeling portion of NWT incubation analysis
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+library(lme4)
+library(lmerTest)
+library(MuMIn)
+library(nlme)
+```
+
+Clean data made in other R scripts this is all need
+```{r}
+data = read.csv("CleanAnalysisData.csv")
+```
+
+Lets start by looking at all the C flux data. 
+soil age, microbes, C/N
+```{r}
+tot.f <-lmer(auc.f ~ soil.age * C.N * mb.c + (1| fire), na.action=na.exclude, data = data)
+anova(tot.f)
+tot.f1 <-lmer(auc.f ~ soil.age * C.N + mb.c + (1| fire), na.action=na.exclude, data = data)
+anova(tot.f, tot.f1)
+tot.f2 <-lmer(auc.f ~ soil.age + C.N + mb.c + (1| fire), na.action=na.exclude, data = data)
+anova(tot.f2, tot.f1)
+anova(tot.f2)
+tot.f3 <-lmer(auc.f ~ soil.age + mb.c + (1| fire), na.action=na.exclude, data = data)
+anova(tot.f2, tot.f3)
+tot.f4 <-lmer(auc.f ~ soil.age + (1| fire), na.action=na.exclude, data = data)
+anova(tot.f4, tot.f3)
+
+plot(tot.f3)
+r.squaredGLMM(tot.f3)
+anova(tot.f3)
+```
+tot.f3 is final soil age + microbial
+
+graph
+```{r}
+ggplot(data, aes(x = soil.age, y = auc.f)) +
+geom_point(size = 4) +
+theme_bw(base_size = 22)+
+scale_y_continuous(expression("Total C" *O[2]* " lost (mg C/ g C) ")) +
+xlab(expression("Bulk soil "*paste(Delta^{14}, "C (‰)"))) +
+geom_smooth(method="lm", formula= y ~ x, se=T, color=1) 
+
+ggplot(data, aes(x = mb.c, y = auc.f)) +
+geom_point(size = 4) +
+theme_bw(base_size = 22)+
+geom_abline(slope = 0,intercept = 0) +
+xlab("Microbial biomass (µg C/ g C)") +
+scale_y_continuous(expression("Total C" *O[2]* " lost (mg C/ g C) ")) +
+stat_smooth(method = "lm", formula = y ~ x, color=1)
+```
+
+
+N mineralization
+```{r}
+nitro <-lmer(min.n ~ soil.age * C.N * mb.c + (1| fire), na.action=na.exclude, data = data)
+nitro1 <-lmer(min.n ~ soil.age * C.N + mb.c + (1| fire), na.action=na.exclude, data = data)
+anova(nitro, nitro1)
+nitro2 <-lmer(min.n ~ soil.age + C.N + mb.c + (1| fire), na.action=na.exclude, data = data)
+anova(nitro2, nitro1)
+anova(nitro2)
+nitro3 <-lmer(min.n ~ C.N + mb.c + (1| fire), na.action=na.exclude, data = data)
+anova(nitro2, nitro3)
+anova(nitro3)
+nitro4 <-lmer(min.n ~ mb.c + (1| fire), na.action=na.exclude, data = data)
+anova(nitro4, nitro3)
+nitro5 <-lmer(min.n ~ C.N + (1| fire), na.action=na.exclude, data = data)
+
+nitro6 <-lmer(min.n ~ 1 + (1| fire), na.action=na.exclude, data = data)
+anova(nitro5, nitro6)
+anova(nitro4, nitro5, nitro6)
+```
+Use model nitro4; mineralization is controlled by microbial biomass
+
+Graph mineralization
+```{r}
+ggplot(data, aes(y = min.n, x = mb.c)) +
+geom_point(size = 4) +
+theme_bw(base_size = 22)+
+scale_x_continuous(expression("Microbial biomass (µg C "*g^-1*"C)")) +
+scale_y_continuous(expression("Net N mineralized (µg N "*g^-1*"N)")) +
+stat_smooth(method = "lm", formula = y ~ x, color=1)
+```
+
+```{r}
+res <-lmer(res.age ~ soil.age * C.N * mb.c + (1| fire), na.action=na.exclude, data = data)
+anova(res)
+res1 <-lmer(res.age ~ soil.age * C.N + mb.c + (1| fire), na.action=na.exclude, data = data)
+anova(res, res1)
+res2 <-lmer(res.age ~ soil.age + C.N + mb.c + (1| fire), na.action=na.exclude, data = data)
+anova(res2, res1)
+res3 <-lmer(res.age ~ soil.age + mb.c + (1| fire), na.action=na.exclude, data = data)
+anova(res2, res3)
+anova(res3)
+res4 <-lmer(res.age ~ soil.age + (1| fire), na.action=na.exclude, data = data)
+anova(res4, res3)
+res5 <-lmer(res.age ~ mb.c + (1| fire), na.action=na.exclude, data = data)
+anova(res5, res3)
+
+
+```
+
+
+```{r}
+ggplot(data, aes(x = soil.age, y = res.age)) +
+geom_point(size = 4) +
+theme_bw(base_size = 22)+
+xlab(expression("Bulk soil "*paste(Delta^{14}, "C (‰)"))) +
+ylab(expression("Respired "*paste(Delta^{14}, "C (‰)"))) +
+stat_smooth(method = "lm", formula = y ~ x, color=1)
+
+ggplot(data, aes(x = mb.c, y = res.age)) +
+geom_point(size = 4) +
+theme_bw(base_size = 22)+
+scale_x_continuous(expression("Microbial biomass (µg C "*g^-1*"C)")) +
+ylab(expression("Respired "*paste(Delta^{14}, "C (‰)"))) +
+stat_smooth(method = "lm", formula = y ~ x, color=1)
+```
+
+
+```{r}
+```
+
+
+
+out of order but N over time with
+a little data wrangling to start
+
+```{r}
+n.time = read.csv("N_time.csv")
+data1 = merge(n.time, data, by = c("sample", "plot", "fire"))
+
+data1$doi = as.factor(data1$doi)
+```
+
+NONE of the variables are controlled by soil age. Some are by time (DIN and ammonium)
+
+DIN over time with soil age
+```{r}
+ctrl <- lmeControl(opt='optim') 
+n.din <-lmer(din ~ soil.age * doi + (1| fire) + (1| sample), na.action=na.exclude, data = data1)
+anova(n.din)
+n.din1 <-lmer(din ~ soil.age + doi + (1| fire) + (1| sample), na.action=na.exclude, data = data1)
+anova(n.din, n.din1)
+
+n.din2 <-lmer(din ~ soil.age + (1| fire) + (1| sample), na.action=na.exclude, data = data1)
+anova(n.din1, n.din2)
+
+n.din3 <-lmer(din ~ doi + (1| fire) + (1| sample), na.action=na.exclude, data = data1)
+anova(n.din1, n.din3)
+n.din4 <-lmer(din ~ 1 + (1| fire) + (1| sample), na.action=na.exclude, data = data1)
+anova(n.din3, n.din4)
+
+anova(n.din3)
+plot(n.din3)
+#need to log transform. but we dont really care the din changes throught time we know that
+r.squaredGLMM(n.din3)
+```
+
+Ammonium nh4
+```{r}
+n.nh4 <-lmer(nh4 ~ soil.age * doi + (1| fire) + (1| sample), na.action=na.exclude, data = data1)
+n.nh41 <-lmer(nh4 ~ soil.age + doi + (1| fire) + (1| sample), na.action=na.exclude, data = data1)
+anova(n.nh4, n.nh41)
+
+n.nh42 <-lmer(nh4 ~ doi + (1| fire) + (1| sample), na.action=na.exclude, data = data1)
+anova(n.nh42, n.nh41)
+
+n.nh43 <-lmer(nh4 ~ 1 + (1| fire) + (1| sample), na.action=na.exclude, data = data1)
+anova(n.nh42, n.nh43)
+
+anova(n.nh42)
+plot(n.nh42)
+#need to log transform
+n.nh44 <-lmer(log(nh4) ~ doi + (1| fire) + (1| sample), na.action=na.exclude, data = data1)
+plot(n.nh44)
+r.squaredGLMM(n.nh42)
+```
+
+Nitrate no3
+```{r}
+n.no3 <-lmer(no3 ~ soil.age * doi + (1| fire) + (1| sample), na.action=na.exclude, data = data1)
+n.no31 <-lmer(no3 ~ soil.age + doi + (1| fire) + (1| sample), na.action=na.exclude, data = data1)
+anova(n.no3, n.no31)
+
+n.no32 <-lmer(no3 ~ doi + (1| fire) + (1| sample), na.action=na.exclude, data = data1)
+anova(n.no32, n.no31)
+
+n.no33 <-lmer(no3 ~ 1 + (1| fire) + (1| sample), na.action=na.exclude, data = data1)
+anova(n.no32, n.no33)
+```
+Nitrate isnt predicted by time (doi)

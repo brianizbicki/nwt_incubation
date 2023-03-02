@@ -1,0 +1,226 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+packages
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+library(randomForest)
+library(caret)#predictor diagnostics 
+library(e1071)#for caret
+library(pdp)
+library(VSURF)
+```
+
+Load file 
+```{r}
+data = read.csv("CleanAnalysisData.csv")
+```
+
+Carbon flux with site variables
+
+```{r}
+rf.c = randomForest(auc.f ~ soil.age + mb.c + meann + meanc + C.N + mb.cn + meanmb + lat_start + long_start + ecoregion + moisture_class + elev + slope + org_layer_depth_transect + density_picea_mariana + age_stand, data = data)
+rf.c
+plot(rf.c)
+
+train(auc.f ~ soil.age + mb.c + meann + meanc + C.N + mb.cn + meanmb + lat_start + long_start + ecoregion + moisture_class + elev + slope + org_layer_depth_transect + density_picea_mariana + age_stand, data = data)
+
+rf.c = randomForest(auc.f ~ soil.age + mb.c + meann + meanc + C.N + mb.cn + meanmb + lat_start + long_start + ecoregion + moisture_class + elev + slope + org_layer_depth_transect + density_picea_mariana + age_stand, data = data)
+
+rf.c
+varImp(rf.c, scale = FALSE)
+varImpPlot(rf.c)
+
+
+rf.c1 = randomForest(auc.f ~ soil.age + C.N + meanc + meanmb, data = data, mtry = 2, importance = T, mode = "regression")
+
+rf.c1
+varImpPlot(rf.c1)
+importance(rf.c1)
+varImp(rf.c1, scale = FALSE)
+```
+model explains around 60% of variance
+
+partial dependence plots for top 4 variables
+```{r}
+par.c <- partial(rf.c1, pred.var = c("meanc"), chull = TRUE)
+plot.c <- autoplot(par.c, contour = TRUE)
+
+par.mb <- partial(rf.c1, pred.var = c("meanmb"), chull = TRUE)
+plot.mb <- autoplot(par.mb, contour = TRUE)
+
+par.soil <- partial(rf.c1, pred.var = c("soil.age"), chull = TRUE)
+plot.soil <- autoplot(par.soil, contour = TRUE)
+
+par.cn <- partial(rf.c1, pred.var = c("C.N"), chull = TRUE)
+plot.cn <- autoplot(par.cn, contour = TRUE)
+
+grid.arrange(plot.mb, plot.soil, plot.c, plot.cn)
+```
+
+vsurf work
+```{r}
+data1 = select(data, c("auc.f", "soil.age", "meann", "meanc", "C.N", "meanmb", "mb.cn", "mb.c", "lat_start", "long_start", "ecoregion", "moisture_class", "elev", "slope", "org_layer_depth_transect", "density_picea_mariana", "age_stand"))
+```
+
+vsurf model
+```{r}
+cflux.vsurf <- VSURF(data1[,2:17], data1[,1], ntree = 100, nfor.thres = 20, nfor.interp = 10, nfor.pred = 10)
+cflux.vsurf
+cflux.vsurf$varselect.thres
+cflux.vsurf$varselect.interp
+cflux.vsurf$varselect.pred
+
+plot(cflux.vsurf)
+plot(cflux.vsurf$varselect.pred, var.names = TRUE)
+```
+vsurf in order of importance = microbial biomass, soil age, %C, C/N
+
+Nitrogen mineralization with site variables
+
+All variables included 5% variance explained. Simplified model and explains a little less, 3%. Nitrogen mineralization is hard.
+```{r}
+rf.n = randomForest(min.n ~ mb.c + soil.age + meanc + meann + meanmb + C.N + lat_start + long_start + ecoregion + moisture_class + elev + slope + org_layer_depth_transect + density_picea_mariana + age_stand, data = data)
+rf.n
+plot(rf.n)
+
+train(min.n ~ mb.c + auc.f + soil.age + meanc + meann + meanmb + C.N + lat_start + long_start + ecoregion + moisture_class + elev + slope + org_layer_depth_transect + density_picea_mariana + age_stand, data = data)
+
+
+rf.n = randomForest(min.n ~ mb.c + soil.age + meanc + meann + meanmb + C.N + lat_start + long_start + ecoregion + moisture_class + elev + slope + org_layer_depth_transect + density_picea_mariana + age_stand, data = data, mtry = 2, importance = T, mode = "regression")
+rf.n
+
+varImpPlot(rf.n)
+
+rf.n1 = randomForest(min.n ~ org_layer_depth_transect + meanmb + mb.c + soil.age, data = data, mtry = 2, importance = T, mode = "regression")
+rf.n1
+
+varImpPlot(rf.n1)
+importance(rf.n1)
+varImp(rf.n1, scale = FALSE)
+```
+
+partail dependence N min. basically useless
+```{r}
+par.soil <- partial(rf.n1, pred.var = c("mb.c"), chull = TRUE)
+plot.soil <- autoplot(par.soil, contour = TRUE)
+
+par.stand <- partial(rf.n1, pred.var = c("soil.age"), chull = TRUE)
+plot.stand <- autoplot(par.stand, contour = TRUE)
+
+par.depth <- partial(rf.n1, pred.var = c("auc.f"), chull = TRUE)
+plot.depth <- autoplot(par.depth, contour = TRUE)
+
+grid.arrange(plot.soil, plot.stand, plot.depth)
+```
+
+```{r}
+data2 = select(data, c("min.n", "soil.age", "meann", "meanc", "C.N", "meanmb", "mb.cn","mb.c", "lat_start", "long_start", "ecoregion", "moisture_class", "elev", "slope", "org_layer_depth_transect", "density_picea_mariana", "age_stand", "auc.f"))
+```
+
+```{r}
+nmin.vf <- VSURF(data2[,2:18], data1[,1], ntree = 100, nfor.thres = 20, nfor.interp = 10, nfor.pred = 10)
+nmin.vf
+nmin.vf$varselect.thres
+nmin.vf$varselect.interp
+nmin.vf$varselect.pred
+```
+C flux is th only parameter used
+
+Respired C age
+
+Same thing, ran 5 times, microbes, soil age, flux, and bs density in top. before reduction explained ~15 after ~20%
+```{r}
+data3 = na.omit(data)
+
+rf.res = randomForest(res.age ~ mb.c + soil.age + meanc + C.N + lat_start + long_start + ecoregion + moisture_class + elev + slope + org_layer_depth_transect + density_picea_mariana + age_stand, data = data3, importance = T, mode = "regression")
+rf.res
+
+train(res.age ~ mb.c + soil.age + meanc + C.N + lat_start + long_start + ecoregion + moisture_class + elev + slope + org_layer_depth_transect + density_picea_mariana + age_stand + auc.f, data = data3)
+
+rf.res = randomForest(res.age ~ mb.c + soil.age + meanc + C.N + lat_start + long_start + ecoregion + moisture_class + elev + slope + org_layer_depth_transect + density_picea_mariana + age_stand , data = data3, mtry = 2, importance = T, mode = "regression")
+rf.res
+
+varImpPlot(rf.res)
+
+rf.res1 = randomForest(res.age ~ mb.c + soil.age + org_layer_depth_transect + density_picea_mariana, data = data3, mtry = 2, importance = T, mode = "regression")
+rf.res1
+
+varImpPlot(rf.res1)
+importance(rf.res1)
+varImp(rf.res1, scale = FALSE)
+```
+
+partial dependency respired age
+```{r}
+par.soil <- partial(rf.res1, pred.var = c("meanmb"), chull = TRUE)
+plot.soil <- autoplot(par.soil, contour = TRUE)
+
+par.cn <- partial(rf.res1, pred.var = c("auc.f"), chull = TRUE)
+plot.cn <- autoplot(par.cn, contour = TRUE)
+
+par.stand <- partial(rf.res1, pred.var = c("soil.age"), chull = TRUE)
+plot.stand <- autoplot(par.stand, contour = TRUE)
+
+par.depth <- partial(rf.res1, pred.var = c("org_layer_depth_transect"), chull = TRUE)
+plot.depth <- autoplot(par.depth, contour = TRUE)
+
+grid.arrange(plot.soil, plot.stand, plot.cn, plot.depth)
+```
+
+```{r}
+data3 = select(data, c("res.age", "soil.age", "meann", "meanc", "C.N", "mb.cn","meanmb", "mb.c", "lat_start", "long_start", "ecoregion", "moisture_class", "elev", "slope", "org_layer_depth_transect", "density_picea_mariana", "age_stand", "auc.f", "min.n"))
+data3 = na.omit(data3)
+```
+
+```{r}
+res.vf <- VSURF(data3[,2:18], data3[,1], ntree = 100, nfor.thres = 20, nfor.interp = 10, nfor.pred = 10)
+res.vf
+res.vf$varselect.thres
+res.vf$varselect.interp
+res.vf$varselect.pred
+```
+C flux is the only parameter
+
+turnover time
+```{r}
+rf.to = randomForest(tover ~ soil.age + mb.c + meann + meanc + C.N + mb.cn + meanmb + lat_start + long_start + ecoregion + moisture_class + elev + slope + org_layer_depth_transect + density_picea_mariana + age_stand, data = data)
+rf.to
+plot(rf.to)
+
+train(tover ~ soil.age + mb.c + meann + meanc + C.N + mb.cn + meanmb + lat_start + long_start + ecoregion + moisture_class + elev + slope + org_layer_depth_transect + density_picea_mariana + age_stand, data = data)
+
+rf.to = randomForest(tover ~ soil.age + mb.c + meann + meanc + C.N + mb.cn + meanmb + lat_start + long_start + ecoregion + moisture_class + elev + slope + org_layer_depth_transect + density_picea_mariana + age_stand, data = data, mtry = 15, importance = T, mode = "regression")
+
+rf.to
+varImpPlot(rf.to)
+
+rf.to1 = randomForest(tover ~ meanc + C.N + meann + soil.age, data = data, mtry = 4, importance = T, mode = "regression")
+
+rf.to1
+varImpPlot(rf.to1)
+importance(rf.to1)
+varImp(rf.to1, scale = FALSE)
+```
+
+partial dependency turnover *****NOT EDITTED*****
+```{r}
+par.soil <- partial(rf.res1, pred.var = c("meanmb"), chull = TRUE)
+plot.soil <- autoplot(par.soil, contour = TRUE)
+
+par.cn <- partial(rf.res1, pred.var = c("auc.f"), chull = TRUE)
+plot.cn <- autoplot(par.cn, contour = TRUE)
+
+par.stand <- partial(rf.res1, pred.var = c("soil.age"), chull = TRUE)
+plot.stand <- autoplot(par.stand, contour = TRUE)
+
+par.depth <- partial(rf.res1, pred.var = c("org_layer_depth_transect"), chull = TRUE)
+plot.depth <- autoplot(par.depth, contour = TRUE)
+
+grid.arrange(plot.soil, plot.stand, plot.cn, plot.depth)
+```

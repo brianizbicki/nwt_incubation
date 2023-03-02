@@ -1,0 +1,928 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+library(lme4)
+library(lmerTest)
+library(MuMIn)
+library(nlme)
+```
+
+Load files with flux and C and N concentration
+```{r}
+cn = read.csv("CN.csv")
+flux = read.csv("All_flux.csv")
+flux.cn = merge(flux, cn, by = c("sample"))
+```
+
+load nitrogen and microbial data
+```{r}
+net.n = read.csv("net_nitrogen.csv")
+mb.nitro = read.csv("MB_DIN.csv")
+```
+
+load soil and respired age data
+```{r}
+legacy = read.csv("legacy.csv")
+res = read.csv("legacy_res.csv")
+```
+
+make one huge dataframe 
+THIS IS A FUCKING MESS but IT WORKS
+```{r}
+flux1 = flux %>%
+  group_by(plot, sample) %>%
+  summarise(mean.flux = mean(flux,  na.rm = TRUE))
+
+flux2 = flux1 %>%
+  group_by(plot, sample) %>%
+  mutate(total.flux = mean.flux * 90)
+
+flux.net = merge(flux2, net.n, by = c("sample", "plot"))
+
+flux.net1 = flux.net %>%
+  group_by(fire, plot, sample) %>%
+  mutate(net.n = mean(net.din, na.rm = TRUE))
+
+c1 = flux.cn %>% 
+  group_by(sample, plot) %>% 
+  summarize(meanc = mean(carbon, na.rm=TRUE))  
+  ungroup()
+
+n1 = flux.cn %>% 
+  group_by(sample, plot) %>% 
+  summarize(meann = mean(nitrogen, na.rm=TRUE)) 
+  ungroup()
+  
+meancn = merge(n1, c1, by = c("sample", "plot"))
+meancn = meancn %>% 
+  mutate(C.N = meanc/meann)
+
+flux.net2 = merge(flux.net1, flux1, by = c( "sample", "plot"))
+
+flux.net.leg = merge(flux.net2, legacy, by = c( "sample", "plot"))
+
+flux.net.res = merge(flux.net.leg, res, by = c( "sample", "plot"), all.x = TRUE)
+
+mb = mb.nitro %>%
+  group_by(fire, plot, sample) %>%
+  summarise(meanmb = mean(mbc,  na.rm = TRUE))
+
+all = merge(flux.net.leg, flux.net.res, by = c("plot" , "fire"), all.x = TRUE)
+
+all = select(all, c("fire", "plot", "sample.x", "mean.flux.x.x", "total.flux.x", "net.nit.x", "net.din.x", "type.x", "D14C.x", "type.y", "D14C.y"))
+
+all = all %>% rename(sample = sample.x, mean.flux = mean.flux.x.x, t.flux = total.flux.x, net.nit = net.nit.x, net.din =  net.din.x, soil.del = type.x, soil.age = D14C.x, res.del = type.y, res.age = D14C.y)
+
+all1 = merge(all, meancn, by = c("sample", "plot"))
+all2 = merge(all1, mb, by = c("fire", "sample", "plot"))
+
+all3 = unique(all2)
+
+full = all3 %>%
+  filter( !is.na(net.nit))
+
+#remove sample, was mostly mineral soil and below 20% cuttoff for organic
+full = full[-c(39), ] 
+```
+
+Add new variables C flux per unit C and C flux per unit microbial biomass and N
+```{r}
+#per C
+full1 = full %>%
+  group_by(fire, plot, sample) %>%
+  mutate(flux.c = mean.flux/meanc)
+#per N
+full1 = full1 %>%
+  group_by(fire, plot, sample) %>%
+  mutate(min.n = net.din/meann)
+```
+
+```{r}
+#per Microbial bio for activity
+full1 = full1 %>%
+  group_by(fire, plot, sample) %>%
+  mutate(flux.mb = meanmb/flux.c)
+#per microbial per g C
+full1 = full1 %>%
+  group_by(fire, plot, sample) %>%
+  mutate(mb.c = meanmb/meanc)
+```
+
+```{r}
+write.csv(full1, "nwtCalcVar.csv")
+```
+
+looking at soil age x flux first
+mean.flux is skewed and log transforming it makes it normal
+```{r}
+ggplot()+
+  geom_histogram(data=full, aes(mean.flux))
+ggplot()+
+  geom_histogram(data=full, aes(log(mean.flux)))
+ggplot()+
+  geom_histogram(data=full, aes(poly(soil.age)))
+ggplot()+
+  geom_histogram(data=full, aes(soil.age))
+
+ctrl <- lmeControl(opt='optim') 
+
+logf <-lmer(log(mean.flux) ~ soil.age + (1| fire), na.action=na.exclude, data = full)
+summary(logf)
+plot(logf)
+r.squaredGLMM(logf)
+anova(logf)
+
+logf1 <-lmer(mean.flux ~ 1 + (1| fire), na.action=na.exclude, data = full)
+summary(logf1)
+anova(logf1)
+anova(logf, logf1)
+r.squaredGLMM(logf1)
+
+ggplot(full, aes(x = soil.age, y = log(mean.flux))) +
+geom_point(size = 2) +
+theme_bw(base_size = 22)+
+geom_abline(slope = 0,intercept = 0) +
+scale_y_continuous(expression("log(mean flux (µg C" *O[2]* "-C "  *  g^-1*"soil))")) +
+xlab(expression("Bulk soil "*paste(Delta^{14}, "C (‰)"))) +
+geom_smooth(method="lm", formula= y ~ x, se=T, color=1)
+```
+
+flux g C x soil age
+same results as just flux without log transforming
+use this flux g C instead of soil throughout. Easier to interpret and follow takes the amount of C in sample out of picture and is less confounding
+```{r}
+ctrl <- lmeControl(opt='optim') 
+
+fc <-lmer(flux.c ~ soil.age + (1| fire), na.action=na.exclude, data = full1)
+summary(fc)
+plot(fc)
+r.squaredGLMM(fc)
+anova(fc)
+
+fc1 <-lmer(flux.c ~ 1 + (1| fire), na.action=na.exclude, data = full1)
+summary(fc1)
+anova(fc1)
+anova(fc, fc1)
+
+ggplot(full1, aes(x = soil.age, y = flux.c)) +
+geom_point(size = 4) +
+theme_bw(base_size = 22)+
+scale_y_continuous(expression("Mean flux (µg C" *O[2]* "-C "  *  g^-1*"C)")) +
+xlab(expression("Bulk soil "*paste(Delta^{14}, "C (‰)"))) +
+geom_smooth(method="lm", formula= y ~ x, se=T, color=1) 
+```
+
+flux x mineralization and nitrate
+```{r}
+ggplot()+
+  geom_histogram(data=full, aes(net.din))
+ggplot()+
+  geom_histogram(data=full, aes(mean.flux))
+ggplot()+
+  geom_histogram(data=full, aes(log(mean.flux)))
+
+ctrl <- lmeControl(opt='optim') 
+nf <-lme(net.din ~ 1,  random=~ 1|fire, method  ="ML", control=ctrl, data=full, na.action=na.exclude)
+summary(nf)
+anova(nf)
+
+nf1 <-lme(net.din ~ mean.flux,  random=~ 1|fire, method  ="ML", control=ctrl, data=full, na.action=na.exclude)
+summary(nf1)
+anova(nf, nf1)
+
+nflog <-lme(net.din ~ log(mean.flux),  random=~ 1|fire, method  ="ML", control=ctrl, data=full, na.action=na.exclude)
+summary(nflog)
+anova(nf1, nflog)
+anova(nf1)
+r.squaredGLMM(nf1)
+plot(nf1)
+
+ggplot(full1, aes(y = net.din, x = mean.flux)) +
+  geom_point(aes(colour = soil.age), size = 5) +
+  scale_color_continuous(low = "black", high = "green" ) +
+  guides(col=guide_legend(expression("Bulk soil "*paste(Delta^{14}, "C (‰)"))))+
+  theme_bw(base_size = 22)+
+scale_y_continuous(expression("Net N mineralized (µg N "*g^-1*"soil)")) +
+scale_x_continuous(expression("Mean flux (µg C" *O[2]* "-C "  *  g^-1*"C)")) +
+stat_smooth(method = "lm", formula = y ~ x, color = 1) 
+
+#nitrate starts here
+ctrl <- lmeControl(opt='optim') 
+nn <-lme(net.nit ~ 1,  random=~ 1|fire, method  ="ML", control=ctrl, data=full, na.action=na.exclude)
+summary(nn)
+
+nn1 <-lme(net.nit ~ mean.flux,  random=~ 1|fire, method  ="ML", control=ctrl, data=full, na.action=na.exclude)
+summary(nn1)
+anova(nn, nn1)
+
+####not significant
+ggplot(full, aes(y = net.nit, x = mean.flux)) +
+geom_point() +
+theme_bw(base_size = 30)+
+ylab("Net Nitrate mineralized (µg N/g dry soil)") +
+xlab(expression("Mean C" *O[2]* " flux")) +
+stat_smooth(method = "lm", formula = y ~ x, size = 2, se = FALSE)
+```
+
+flux and minerlaization gram C and gram N
+```{r}
+ctrl <- lmeControl(opt='optim') 
+car <-lme(min.n ~ 1,  random=~ 1|fire, method  ="ML", control=ctrl, data=full1, na.action=na.exclude)
+
+car1 <-lme(min.n ~ flux.c,  random=~ 1|fire, method  ="ML", control=ctrl, data=full1, na.action=na.exclude)
+anova(car1)
+anova(car, car1)
+
+car2 <-lme(min.n ~ flux.c + soil.age,  random=~ 1|fire, method  ="ML", control=ctrl, data=full1, na.action=na.exclude)
+anova(car2)
+anova(car2, car1)
+
+ggplot(full1, aes(y = min.n, x = flux.c)) +
+  geom_point( size = 4) +
+ # scale_color_continuous(low = "black", high = "green" ) +
+  #guides(col=guide_legend(expression("Bulk soil "*paste(Delta^{14}, "C (‰)"))))+
+  theme_bw(base_size = 22)+
+scale_y_continuous(expression("Net N mineralized (µg N "*g^-1*"N)")) +
+scale_x_continuous(expression("Mean flux (µg C" *O[2]* "-C "  *  g^-1*"C)")) +
+stat_smooth(method = "lm", formula = y ~ x, color = 1) 
+
+#cant use this graph age not significant with n min and flux
+ggplot(full1, aes(y = min.n, x = flux.c)) +
+  geom_point(aes(colour = soil.age), size = 5) +
+  scale_color_continuous(low = "black", high = "green" ) +
+  guides(col=guide_legend(expression("Bulk soil "*paste(Delta^{14}, "C (‰)"))))+
+  theme_bw(base_size = 22)+
+scale_y_continuous(expression("Net N mineralized (µg N "*g^-1*"N)")) +
+scale_x_continuous(expression("Mean flux (µg C" *O[2]* "-C "  *  g^-1*"C)")) 
+```
+
+
+flux per C (not like soil as above) x mineralization and nitrate
+same results as per g soil
+```{r}
+ggplot()+
+  geom_histogram(data=full1, aes(net.din))
+ggplot()+
+  geom_histogram(data=full1, aes(flux.c))
+
+ctrl <- lmeControl(opt='optim') 
+car <-lme(net.din ~ 1,  random=~ 1|fire, method  ="ML", control=ctrl, data=full1, na.action=na.exclude)
+summary(car)
+anova(car)
+
+car1 <-lme(net.din ~ flux.c,  random=~ 1|fire, method  ="ML", control=ctrl, data=full1, na.action=na.exclude)
+summary(car1)
+anova(car, car1)
+anova(car1)
+plot(car1)
+
+carlog <-lme(net.din ~ log(flux.c),  random=~ 1|fire, method  ="ML", control=ctrl, data=full1, na.action=na.exclude)
+summary(carlog)
+anova(car1, carlog)
+anova(carlog)
+r.squaredGLMM(carlog)
+plot(carlog)
+
+ggplot(full1, aes(y = net.din, x = flux.c)) +
+geom_point(size = 2) +
+theme_bw(base_size = 22)+
+scale_y_continuous(expression("Net N mineralized (µg N "*g^-1*"N)")) +
+scale_x_continuous(expression("Mean flux (µg C" *O[2]* "-C "  *  g^-1*"C)")) +
+stat_smooth(method = "lm", formula = y ~ x, color = 1)
+
+#nitrate starts here
+ctrl <- lmeControl(opt='optim') 
+nn <-lme(net.nit ~ 1,  random=~ 1|fire, method  ="ML", control=ctrl, data=full1, na.action=na.exclude)
+summary(nn)
+
+nn1 <-lme(net.nit ~ flux.c,  random=~ 1|fire, method  ="ML", control=ctrl, data=full1, na.action=na.exclude)
+summary(nn1)
+anova(nn, nn1)
+
+####not significant
+ggplot(full, aes(y = net.nit, x = mean.flux)) +
+geom_point() +
+theme_bw(base_size = 30)+
+ylab("Net Nitrate mineralized (µg N/g dry soil)") +
+xlab(expression("Mean C" *O[2]* " flux")) +
+stat_smooth(method = "lm", formula = y ~ x, size = 2, se = FALSE)
+```
+
+Analysis soil age x mineralization
+both variables are normally dist
+not significant
+```{r}
+ggplot()+
+  geom_histogram(data=full, aes(net.din))
+ggplot()+
+  geom_histogram(data=full, aes(soil.age))
+
+ctrl <- lmeControl(opt='optim') 
+m1 <-lme(net.din ~ soil.age,  random=~ 1|fire, method  ="ML", control=ctrl, data=full, na.action=na.exclude)
+summary(m1)
+anova(m1)
+
+m2 <-lme(net.din ~ 1,  random=~ 1|fire, method  ="ML", control=ctrl, data=full, na.action=na.exclude)
+summary(m2)
+anova(m1, m2)
+
+m3 <-lme(net.din ~ log1p(soil.age),  random=~ 1|fire, method  ="ML", control=ctrl, data=full, na.action=na.exclude)
+summary(m3)
+anova(m1, m3)
+
+ggplot(full, aes(x = soil.age, y = net.din)) +
+geom_point(size = 2) +
+theme_bw(base_size = 22)+
+geom_abline(slope = 0,intercept = 0) +
+scale_y_continuous(expression("Net N mineralized (µg N "*g^-1*"N)")) +
+xlab(expression("Bulk soil delt"*a^14*"C") ) 
+```
+
+soil age and mineralization per g N
+```{r}
+ctrl <- lmeControl(opt='optim') 
+na1 <-lme(min.n ~ soil.age,  random=~ 1|fire, method  ="ML", control=ctrl, data=full1, na.action=na.exclude)
+summary(na1)
+anova(na1)
+
+na2 <-lme(min.n ~ 1,  random=~ 1|fire, method  ="ML", control=ctrl, data=full1, na.action=na.exclude)
+anova(na2)
+anova(na1, na2)
+
+na3 <-lme(min.n + min.n^2~ soil.age,  random=~ 1|fire, method  ="ML", control=ctrl, data=full1, na.action=na.exclude)
+anova(na3)
+plot(na3)
+
+ggplot(full1, aes(x = soil.age, y = min.n)) +
+geom_point(size = 2) +
+theme_bw(base_size = 22)+
+scale_y_continuous(expression("Net N mineralized (µg N "*g^-1*"N)")) +
+xlab(expression("Bulk soil "*paste(Delta^{14}, "C (‰)")))  
+```
+
+variance structure for age and mineralization example code
+Look at Zuur book
+```{r}
+model=lme(data=data, y~ x* z,  weights=varComb(varExp(form=~z), varIdent(form=~1|x)),random=~1|project/fire, na.action=na.omit, method="REML")
+```
+
+soil age and microbial biomass
+```{r}
+ggplot()+
+  geom_histogram(data=full, aes(meanmb))
+ggplot()+
+  geom_histogram(data=full, aes(soil.age))
+
+null <-lmer(mb.c ~ 1 + (1|fire), data=full1, na.action=na.exclude)
+summary(null)
+anova(null)
+r.squaredGLMM(null)
+
+mb <-lmer(mb.c ~ soil.age + (1|fire), data=full1, na.action=na.exclude)
+summary(mb)
+anova(null, mb)
+anova(mb)
+r.squaredGLMM(mb)
+plot(mb)
+
+ggplot(full1, aes(x = soil.age, y = mb.c)) +
+geom_point(size = 2) +
+theme_bw(base_size = 22)+
+geom_abline(slope = 0,intercept = 0) +
+scale_y_continuous(expression("Microbial C (µg C "*g^-1*"C)")) +
+xlab(expression("Bulk soil "*paste(Delta^{14}, "C (‰)"))) +
+stat_smooth(method = "lm", formula = y ~ x, color=1)
+```
+
+soil age and microbial activity
+```{r}
+ggplot()+
+  geom_histogram(data=full1, aes(flux.mb))
+ggplot()+
+  geom_histogram(data=full1, aes(soil.age))
+
+act1 <-lmer(flux.mb ~ 1 + (1|fire), data=full1, na.action=na.exclude)
+summary(act1)
+anova(act1)
+r.squaredGLMM(act1)
+
+act.age <-lmer(flux.mb ~ soil.age + (1|fire), data=full1, na.action=na.exclude)
+summary(act.age)
+anova(act1, act.age)
+anova(act.age)
+r.squaredGLMM(act.age)
+plot(act.age)
+
+act.age1 <-lmer(log(flux.mb) ~ soil.age + (1|fire), data=full1, na.action=na.exclude)
+summary(act.age1)
+anova(act.age, act.age1)
+r.squaredGLMM(act.age1)
+plot(act.age1)
+
+ggplot(full1, aes(x = soil.age, y = log(flux.mb))) +
+geom_point(size = 2) +
+theme_bw(base_size = 20)+
+scale_y_continuous(expression("Microbial C respiration mass ratio")) +
+xlab(expression("Bulk soil "*paste(Delta^{14}, "C (‰)"))) +
+stat_smooth(method = "lm", formula = y ~ x, color=1)
+
+#(µg C" *O[2]* "-C "*g^-1*"C µg C" *g^-1*""
+```
+
+mineralization and microbial activity
+not significant
+makes sense flux not related to mineralization as well
+```{r}
+minmb <-lmer(net.din ~ 1 + (1|fire), data=full1, na.action=na.exclude)
+summary(minmb)
+minmb1 <-lmer(net.din ~ flux.mb + (1|fire), data=full1, na.action=na.exclude)
+summary(minmb1)
+anova(minmb, minmb1)
+anova(minmb1)
+r.squaredGLMM(minmb1)
+```
+
+microbes and mineralization
+```{r}
+ggplot()+
+  geom_histogram(data=full, aes(meanmb))
+ggplot()+
+  geom_histogram(data=full, aes(net.din))
+
+mbmin <-lmer(net.din ~ 1 + (1|fire), data=full, na.action=na.exclude)
+summary(mbmin)
+mbmin1 <-lmer(net.din ~ meanmb + (1|fire), data=full, na.action=na.exclude)
+summary(mbmin1)
+anova(mbmin, mbmin1)
+anova(mbmin1)
+r.squaredGLMM(mbmin1)
+
+ggplot(full, aes(y = net.din, x = meanmb)) +
+geom_point(size = 2) +
+theme_bw(base_size = 22)+
+scale_x_continuous(expression("Microbial C (µg C "*g^-1*"C)")) +
+scale_y_continuous(expression("Net N mineralized (µg N "*g^-1*"N)")) +
+stat_smooth(method = "lm", formula = y ~ x, color=1)
+```
+
+soil age x percent carbon graph
+```{r}
+carbon <-lmer(meanc ~ 1 + (1|fire), data=full2, na.action=na.exclude)
+summary(carbon)
+carbon1 <-lmer(meanc ~ soil.age + (1|fire), data=full, na.action=na.exclude)
+summary(carbon1)
+anova(carbon, carbon1)
+anova(carbon1)
+r.squaredGLMM(carbon1)
+
+ggplot(full, aes(x = soil.age, y = meanc)) +
+geom_point(size = 2) +
+theme_bw(base_size = 30)+
+geom_abline(slope = 0,intercept = 0) +
+ylab("Carbon (%)") +
+xlab(expression("Bulk soil "*paste(Delta^{14}, "C (‰)"))) +
+stat_smooth(method = "lm", formula = y ~ x, color=1)
+```
+
+soil age x CN ratio graph
+```{r}
+ggplot()+
+  geom_histogram(data=full, aes(C.N))
+
+carbon <-lmer(C.N ~ 1 + (1|fire), data=full, na.action=na.exclude)
+summary(carbon)
+carbon1 <-lmer(C.N ~ soil.age + (1|fire), data=full, na.action=na.exclude)
+summary(carbon1)
+anova(carbon, carbon1)
+anova(carbon1)
+r.squaredGLMM(carbon1)
+plot(carbon1)
+
+carbon2 = lmer(log(C.N) ~ soil.age + (1|fire), data=full, na.action=na.exclude)
+summary(carbon1)
+anova(carbon1, carbon2)
+anova(carbon2)
+r.squaredGLMM(carbon2)
+plot(carbon2)
+      
+ggplot(full, aes(x = soil.age, y = C.N)) +
+geom_point(size = 2) +
+theme_bw(base_size = 30)+
+ylab("C/N ratio") +
+xlab(expression("Bulk soil "*paste(Delta^{14}, "C (‰)"))) 
+```
+
+```{r}
+min.cn <-lmer(min.n ~ C.N + (1|fire), data=full2, na.action=na.exclude)
+min.cn1 <-lmer(min.n ~ 1 + (1|fire), data=full2, na.action=na.exclude)
+anova(min.cn, min.cn1)
+anova(min.cn)
+
+ggplot(full1, aes(y = min.n, x = C.N)) +
+geom_point(size = 2) +
+theme_bw(base_size = 30)+
+xlab("C/N ratio") +
+scale_y_continuous(expression("Net N mineralized (µg N "*g^-1*"N)")) 
+
+min.bs <-lmer(min.n ~ density_picea_mariana + (1|fire), data=full2, na.action=na.exclude)
+min.bs1 <-lmer(min.n ~ 1 + (1|fire), data=full2, na.action=na.exclude)
+anova(min.bs, min.bs1)
+anova(min.bs)
+
+ggplot(full2, aes(y = min.n, x = density_picea_mariana)) +
+geom_point(size = 2) +
+theme_bw(base_size = 30)+
+xlab("BS density") +
+scale_y_continuous(expression("Net N mineralized (µg N "*g^-1*"N)"))
+```
+
+flux x respiration age graph
+```{r}
+ggplot()+
+  geom_histogram(data=full, aes(mean.flux))
+ggplot()+
+  geom_histogram(data=full, aes(res.age))
+
+res1 <-lmer(res.age ~ 1 + (1|fire), data=full1, na.action=na.exclude)
+summary(res1)
+res2 <-lmer(res.age ~ flux.c + (1|fire), data=full1, na.action=na.exclude)
+summary(res2)
+anova(res1, res2)
+anova(res2)
+r.squaredGLMM(res2)
+res3 <-lmer(res.age ~ log(mean.flux) + (1|fire), data=full, na.action=na.exclude)
+summary(res3)
+anova(res2, res3)
+
+ggplot(full1, aes(x = flux.c, y = res.age)) +
+geom_point(size = 4) +
+theme_bw(base_size = 22)+
+scale_x_continuous(expression("Mean flux (µg C" *O[2]* "-C "  *  g^-1*"C)")) +
+ylab(expression("Respired "*paste(Delta^{14}, "C (‰)"))) +
+stat_smooth(method = "lm", formula = y ~ x, color=1)
+```
+
+flux g C x respiration age graph
+same as above
+```{r}
+res1 <-lmer(res.age ~ 1 + (1|fire), data=full1, na.action=na.exclude)
+summary(res1)
+res2 <-lmer(res.age ~ flux.c + (1|fire), data=full1, na.action=na.exclude)
+summary(res2)
+anova(res1, res2)
+anova(res2)
+r.squaredGLMM(res2)
+plot(res2)
+
+ggplot(full1, aes(x = flux.c, y = res.age)) +
+geom_point(size = 4) +
+theme_bw(base_size = 22)+
+scale_x_continuous(expression("Mean flux (µg C" *O[2]* "-C "  *  g^-1*"C)")) +
+ylab(expression("Respired "*paste(Delta^{14}, "C (‰)"))) +
+stat_smooth(method = "lm", formula = y ~ x, color=1)
+```
+
+depth and moisture are .55 correlation so just need one in model. additive model res ~ flux + moisture is model
+```{r}
+site.chr = read.csv("NWT_site_charac_combustion.csv")
+res.site = merge(full1, site.chr, by = c("plot"))
+
+res.age <-lmer(res.age ~ moisture_class * org_layer_depth_transect + (1|fire), data=res.site, na.action=na.exclude)
+anova(res.age)
+res.age1 <-lmer(res.age ~ moisture_class + org_layer_depth_transect + (1|fire), data=res.site, na.action=na.exclude)
+anova(res.age, res.age1)
+anova(res.age1)
+res.age2 <-lmer(res.age ~ 1 + (1|fire), data=res.site, na.action=na.exclude)
+anova(res.age1, res.age2)
+anova(res.age1)
+r.squaredGLMM(res.age1)
+plot(res.age1)
+
+m.org <-lmer( org_layer_depth_transect~ moisture_class + (1|fire), data=res.site, na.action=na.exclude)
+r.squaredGLMM(m.org)
+
+res.site$moisture<-factor(res.site$moisture, levels= c("mesic-subxeric","mesic","mesic-subhygric", "subhygric" ))
+
+ggplot(res.site, aes(x = flux.c, y = res.age, color = moisture_class)) +
+geom_point(size = 2) +
+theme_bw(base_size = 22)+
+scale_fill_brewer(palette = "RdYlBu") + 
+scale_color_brewer(palette = "RdYlBu") +
+scale_x_continuous(expression("Mean flux (µg C" *O[2]* "-C "  *  g^-1*"C)")) +
+ylab(expression("Respired "*paste(Delta^{14}, "C (‰)"))) +
+  geom_smooth(method = glm, formula = y ~ x, se = FALSE)
+```
+
+
+```{r}
+ggplot(full1, aes(x = flux.c, y = res.age)) +
+geom_point(size = 4) +
+theme_bw(base_size = 22)+
+scale_x_continuous(expression("Mean flux (µg C" *O[2]* "-C "  *  g^-1*"C)")) +
+ylab(expression("Respired "*paste(Delta^{14}, "C (‰)"))) +
+stat_smooth(method = "lm", formula = y ~ x, color=1)
+```
+
+soil age and respiration age for transit time and C cycling
+```{r}
+ggplot(full, aes(x = soil.age, y = res.age)) +
+geom_point(size = 2) +
+theme_bw(base_size = 22)+
+geom_abline(slope = 1,intercept = 0) +
+xlab(expression("Bulk soil "*paste(Delta^{14}, "C (‰)"))) +
+ylab(expression("Respired "*paste(Delta^{14}, "C (‰)"))) 
+```
+
+microbial biomass over time graph
+```{r}
+mb.nitro$doi=as.factor(mb.nitro$doi)
+se<- function(x) sqrt(var(x)/4)
+
+mb.avr <- aggregate(mbc ~ doi, data=mb.nitro, FUN=mean)
+mb.se <- aggregate(mbc ~ doi, data=mb.nitro, FUN=se)
+mb.combo<- merge(mb.avr, mb.se, by=c("doi"))
+colnames(mb.combo)=c('doi', 'mean','se')
+
+ggplot(mb.combo, aes(x = doi, y = mean)) + 
+  scale_y_continuous(expression("Microbial biomass C (µg C/g dry soil)")) +
+  geom_errorbar(aes(ymax = mean + se, ymin = mean - se), width=0.25) +
+  geom_point(size = 1.7) +
+  theme(text = element_text(size=25),
+        panel.background = element_rect(fill='white', colour='white'),
+        panel.border = element_rect(fill = NA, color = "black"),
+        axis.title = element_text(face = "bold",size = rel(1)),
+        axis.title.y = element_text(angle=90,vjust =2),
+        axis.text = element_text(size = 15),
+        axis.line = element_line(colour="black"),
+        axis.ticks = element_line(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position= "none",
+        strip.background=element_rect(colour=NA ,fill= NA),
+        strip.text = element_text(face="bold"))
+```
+
+microbes by sample to check pattern
+```{r}
+ggplot(mb.nitro, aes(x=doi)) +
+
+ylab('MB biomass') + 
+facet_wrap(~ sample, ncol=6) +
+geom_point(aes(y=mbc)) 
+```
+
+nitrogen over time graph
+```{r}
+mb.nitro$doi=as.factor(mb.nitro$doi)
+se<- function(x) sqrt(var(x)/4)
+
+din.avr <- aggregate(din ~ doi, data=mb.nitro, FUN=mean)
+din.se <- aggregate(din ~ doi, data=mb.nitro, FUN=se)
+din.combo<- merge(din.avr, din.se, by=c("doi"))
+colnames(din.combo)=c('doi', 'mean','se')
+
+ggplot(din.combo, aes(x = doi, y = mean)) + 
+  scale_y_continuous(expression("Extractable DIN (µg N/g dry soil)")) +
+  xlab("Day of incubation") +
+  geom_errorbar(aes(ymax = mean + se, ymin = mean - se), width=0.25) +
+  geom_point(size = 1.7) +
+  theme(text = element_text(size=22),
+        panel.background = element_rect(fill='white', colour='white'),
+        panel.border = element_rect(fill = NA, color = "black"),
+        axis.title = element_text(face = "bold",size = rel(1)),
+        axis.title.y = element_text(angle=90,vjust =2),
+        axis.text = element_text(size = 15),
+        axis.line = element_line(colour="black"),
+        axis.ticks = element_line(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position= "none",
+        strip.background=element_rect(colour=NA ,fill= NA),
+        strip.text = element_text(face="bold"))
+```
+
+moisture and depth influence on flux
+depth is significant but does it matter relationship isnt strong and is almost flat
+
+moisture depth interaction model not significant
+```{r}
+site.chr = read.csv("NWT_site_charac_combustion.csv")
+flux = read.csv("All_flux.csv")
+
+flux.site = flux %>%
+  group_by(plot, sample) %>%
+  mutate(mean.flux = mean(flux,  na.rm = TRUE))
+
+flux.site = merge(flux.site, site.chr, by = c("plot"))
+flux.site$moisture<-factor(flux.site$moisture, levels= c("mesic-subxeric","mesic","mesic-subhygric", "subhygric" ))
+
+flux.site = flux.site %>%
+  group_by(plot, sample, mean.flux, burn, moisture, org_layer_depth_transect) %>%
+  summarise(flux = mean(mean.flux,  na.rm = TRUE))
+
+moist1 <-lmer(mean.flux ~ 1 + (1|burn), data=flux.site, na.action=na.exclude)
+summary(moist1)
+moist2 <-lmer(mean.flux ~ moisture + (1|burn), data=flux.site, na.action=na.exclude)
+summary(moist2)
+anova(moist1, moist2)
+
+ggplot(flux.site, aes(y= mean.flux, x = moisture)) +
+  geom_boxplot() +
+  geom_point(data=flux.site, aes(y=mean.flux, color = moisture ),  position=position_dodge(width=0.75))+
+  theme_bw(base_size = 22)+
+  scale_fill_brewer(palette="RdYlBu", direction=-1)+
+  scale_color_brewer(palette="RdYlBu", direction=-1) +
+  xlab("Mousture class") +
+  scale_y_continuous(expression("Mean flux (µg C" *O[2]* "-C "  *  g^-1*"C)")) 
+depth <-lmer(mean.flux ~ 1 + (1|burn), data=flux.site, na.action=na.exclude)
+summary(depth)
+depth1 <-lmer(mean.flux ~ org_layer_depth_transect + (1|burn), data=flux.site, na.action=na.exclude)
+summary(depth1)
+anova(depth, depth1)
+r.squaredGLMM(depth1)
+plot(depth1)
+
+ggplot(flux.site, aes(x = org_layer_depth_transect , y = mean.flux)) +
+geom_point(size = 2) +
+theme_bw(base_size = 22)+
+scale_y_continuous(expression("Mean flux (µg C" *O[2]* "-C "  *  g^-1*"soil)")) +
+xlab("Soil organic layer depth") +
+   scale_fill_brewer(palette="RdYlBu", direction=-1)+
+  scale_color_brewer(palette="RdYlBu", direction=-1) +
+stat_smooth(method = "lm", formula = y ~ x, color=1)
+
+dep.moi <-lmer(flux.c ~ org_layer_depth_transect * moisture + (1|burn), data=site.flux.all, na.action=na.exclude)
+anova(dep.moi)
+dep.moi1 <-lmer(flux.c ~ org_layer_depth_transect + moisture + (1|burn), data=site.flux.all, na.action=na.exclude)
+anova(dep.moi, dep.moi1)
+anova(dep.moi1)
+```
+
+```{r}
+site.flux.all = merge(flux.site, full1, by = c("plot", "sample"))
+
+depth <-lmer(soil.age ~ 1 + (1|burn), data=site.flux.all, na.action=na.exclude)
+summary(depth)
+depth1 <-lmer(soil.age ~ org_layer_depth_transect + (1|burn), data=site.flux.all, na.action=na.exclude)
+summary(depth1)
+anova(depth, depth1)
+r.squaredGLMM(depth1)
+plot(depth1)
+
+ggplot(site.flux.all, aes(x = org_layer_depth_transect , y = soil.age)) +
+geom_point(size = 2) +
+theme_bw(base_size = 22)+
+ylab(expression("Bulk soil "*paste(Delta^{14}, "C (‰)"))) +
+xlab("Soil organic layer depth") +
+stat_smooth(method = "lm", formula = y ~ x, color=1)
+```
+
+moisture and organic layer depth with mineralization 
+same things as with C flux
+same as C. Moisture not sig; organic layer depth is
+also fit interaction model only org deoth sig
+```{r}
+moi.n <-lmer( min.n ~ moisture * org_layer_depth_transect + (1|burn), data= site.flux.all, na.action=na.exclude)
+moi.n1 <-lmer( min.n ~ moisture + org_layer_depth_transect + (1|burn), data= site.flux.all, na.action=na.exclude)
+anova(moi.n, moi.n1)
+anova(moi.n1)
+
+moi.n2 <-lmer( min.n ~ org_layer_depth_transect + (1|burn), data= site.flux.all, na.action=na.exclude)
+anova(moi.n1, moi.n2)
+moi.n3 <-lmer( min.n ~ 1 + (1|burn), data= site.flux.all, na.action=na.exclude)
+anova(moi.n3, moi.n2)
+r.squaredGLMM(moi.n2)
+plot(moi.n2)
+
+ggplot(site.flux.all, aes(x = org_layer_depth_transect , y = min.n)) +
+geom_point(size = 2) +
+theme_bw(base_size = 22)+
+scale_y_continuous(expression("Net N mineralized (µg N "*g^-1*"N)")) +
+xlab("Soil organic layer depth") +
+stat_smooth(method = "lm", formula = y ~ x, color=1)
+
+moist1 <-lmer(min.n ~ 1 + (1|burn), data=site.flux.all, na.action=na.exclude)
+summary(moist1)
+moist2 <-lmer(min.n ~ moisture + (1|burn), data=site.flux.all, na.action=na.exclude)
+summary(moist2)
+anova(moist1, moist2)
+anova(moist2)
+
+site.flux.all$moisture<-factor(site.flux.all$moisture, levels= c("mesic-subxeric","mesic","mesic-subhygric", "subhygric" ))
+
+ggplot(site.flux.all, aes(y= min.n, x = moisture)) +
+  geom_boxplot() +
+  geom_point(data=site.flux.all, aes(y=min.n, color = moisture ),  position=position_dodge(width=0.75))+
+  theme_bw(base_size = 22)+
+  scale_fill_brewer(palette="RdYlBu", direction=-1)+
+  scale_color_brewer(palette="RdYlBu", direction=-1) +
+  xlab("Mousture class") +
+scale_y_continuous(expression("Net N mineralized (µg N "*g^-1*"N)")) 
+```
+
+nitrogen doesn change with soil age; not sig
+```{r}
+n <-lmer(meann ~ 1 + (1|fire), data=full, na.action=na.exclude)
+
+n1 <-lmer(meanc ~ soil.age + (1|fire), data=full, na.action=na.exclude)
+anova(n1)
+anova(n, n1)
+
+ggplot(full, aes(x = soil.age, y = meann)) +
+geom_point(size = 2) +
+theme_bw(base_size = 30)+
+geom_abline(slope = 0,intercept = 0) +
+ylab("Nitrogen (%)") +
+xlab(expression("Bulk soil "*paste(Delta^{14}, "C (‰)"))) 
+```
+
+
+flux over time by g C with site characteristics
+```{r}
+cn = read.csv("CN.csv")
+flux = read.csv("All_flux.csv")
+flux.cn = merge(flux, cn, by = c("sample"))
+
+c1 = flux.cn %>% 
+  group_by(sample, plot) %>% 
+  summarize(meanc = mean(carbon, na.rm=TRUE))  
+ 
+n1 = flux.cn %>% 
+  group_by(sample, plot) %>% 
+  summarize(meann = mean(nitrogen, na.rm=TRUE)) 
+ 
+meancn = merge(n1, c1, by = c("sample", "plot"))
+meancn = meancn %>% 
+  mutate(C.N = meanc/meann)
+
+flux.cn = merge(flux, meancn, by = c("sample"))
+
+#per C
+full1 = flux.cn %>%
+  group_by(sample, DOI) %>%
+  mutate(flux.c = flux/meanc)
+
+site.chr = read.csv("NWT_site_charac_combustion.csv")
+
+flux.and.site = select(full1, c("sample", "DOI", "moisture", "plot.x", "flux.c")) %>% 
+  rename(plot = plot.x)
+
+full2 = merge(flux.and.site, site.chr, by = c("plot"))
+```
+
+
+DOI and moisture g C flux analysis
+DOI sig not moiusture
+```{r}
+x1 <-lmer(flux.c ~ DOI * moisture + (1|burn)+(1|sample), data= full2, na.action=na.exclude)
+anova(x1)
+
+x2 <-lmer(flux.c ~ DOI + moisture + (1|burn)+(1|sample), data= full2, na.action=na.exclude)
+anova(x1, x2)
+anova(x2)
+
+x3 <-lmer(flux.c ~ DOI + (1|burn)+(1|sample), data= full2, na.action=na.exclude)
+anova(x3, x2)
+anova(x3)
+
+x4 <-lmer(flux.c ~ 1 + (1|burn)+(1|sample), data= full2, na.action=na.exclude)
+anova(x3, x4)
+
+full2$moisture<-factor(full2$moisture, levels= c("mesic-subxeric","mesic","mesic-subhygric", "subhygric" ))
+
+ggplot(full2, aes(x = DOI , y = flux.c, color =moisture)) +
+geom_point(size = 2) +
+theme_bw(base_size = 22)+
+scale_fill_brewer(palette = "RdYlBu") + 
+  scale_color_brewer(palette = "RdYlBu") +
+  scale_y_continuous(expression("Flux (µg C" *O[2]* "-C "*g^-1*"C)")) +
+xlab("DAY") +
+  geom_smooth(formula=y~x, method="glm", method.args=list(family=gaussian(link="log"))) 
+
+```
+
+DOI flux by sample
+they all look more or less linear
+```{r}
+full2$moisture<-factor(full2$moisture, levels= c("mesic-subxeric","mesic","mesic-subhygric", "subhygric" ))
+
+ggplot(full2, aes(x = DOI , y = flux.c, color =moisture)) +
+geom_point(size = 2) +
+theme_bw(base_size = 10)+
+scale_fill_brewer(palette = "RdYlBu") + 
+  scale_color_brewer(palette = "RdYlBu") +
+  scale_y_continuous(expression("Flux (µg C" *O[2]* "-C "*g^-1*"C)")) +
+xlab("DAY") +
+  geom_smooth(formula=y~x, method="glm", method.args=list(family=gaussian(link="log"))) +
+  facet_wrap(~ sample) 
+  
+```
+
