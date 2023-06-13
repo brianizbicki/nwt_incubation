@@ -1,3 +1,5 @@
+If using data cite Izbicki et al. 2023 in Ecosphere
+
 # nwt_incubation
 All_flux.csv is raw CO2 flux data
 
